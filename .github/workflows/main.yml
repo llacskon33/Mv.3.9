@@ -1,0 +1,89 @@
+
+name: Windows RDP - Prueba
+
+on:
+  workflow_dispatch:
+    inputs:
+      minutos:
+        description: "Tiempo de prueba en minutos (máximo 300)"
+        required: true
+        default: "30"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Configurar Windows para RDP
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          # Activar Escritorio remoto
+          Set-ItemProperty `
+            -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
+            -Name fDenyTSConnections -Value 0
+
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+
+          # Mostrar el estado del servicio
+          Set-Service -Name TermService -StartupType Automatic
+          Start-Service -Name TermService
+
+          Write-Host "Windows preparado para RDP."
+          Write-Host "Puerto: 3389"
+
+      - name: Instalar Tailscale
+        shell: pwsh
+        env:
+          TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          if (-not $env:TS_AUTHKEY) {
+            throw "Añade TS_AUTHKEY en los secretos del repositorio."
+          }
+
+          $msi = "$env:TEMP\tailscale.msi"
+
+          Invoke-WebRequest `
+            -Uri "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi" `
+            -OutFile $msi
+
+          Start-Process msiexec.exe `
+            -ArgumentList "/i `"$msi`" /qn /norestart" `
+            -Wait
+
+          $ts = "$env:ProgramFiles\Tailscale\tailscale.exe"
+
+          & $ts up --authkey="$env:TS_AUTHKEY" --hostname="github-windows-test"
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "No se pudo conectar Tailscale."
+          }
+
+          $ip = & $ts ip -4
+          Write-Host "IP Tailscale: $ip"
+
+      - name: Mantener Windows encendido
+        shell: pwsh
+        env:
+          MINUTOS: ${{ inputs.minutos }}
+        run: |
+          $mins = 30
+          if (-not [int]::TryParse($env:MINUTOS, [ref]$mins)) {
+            throw "El tiempo debe ser un número."
+          }
+
+          if ($mins -lt 1 -or $mins -gt 300) {
+            throw "El tiempo debe estar entre 1 y 300 minutos."
+          }
+
+          Write-Host "Windows estará activo durante $mins minutos."
+          Start-Sleep -Seconds ($mins * 60)
+          
